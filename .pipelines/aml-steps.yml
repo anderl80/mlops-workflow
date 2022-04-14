@@ -1,0 +1,39 @@
+parameters:
+- name: rgname  # defaults for any parameters that aren't specified
+  default: ''
+- name: amlwsname
+  default: ''
+- name: initialdatasetname
+  default: ''
+- name: codeenvname
+  default: ''
+- name: computename
+  default: ''
+- name: serviceconnectionname
+  default: ''
+
+steps:
+- checkout: self
+- task: UsePythonVersion@0
+  inputs:
+    versionSpec: '3.7' 
+    addToPath: true 
+
+- script: pip install -r requirements.txt
+  displayName: 'Install requirements'
+
+- task: AzureCLI@1
+  inputs:
+    azureSubscription: ${{ parameters.serviceconnectionname }}
+    scriptLocation: inlineScript
+    workingDirectory: $(Build.SourcesDirectory)
+    inlineScript: |
+      cd src
+      export SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+      export WORKSPACE_NAME=${{ parameters.amlwsname }}
+      export RESOURCE_GROUP=${{ parameters.rgname }}
+      export INITIAL_DATASET_NAME=${{ parameters.initialdatasetname }}
+      export CODE_ENV_NAME=${{ parameters.codeenvname }}
+      export COMPUTE_NAME=${{ parameters.computename }}
+      python -m aml_service.training
+  displayName: 'Run Azure Machine Learning Pipeline'

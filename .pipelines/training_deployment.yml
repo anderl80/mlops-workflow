@@ -1,0 +1,120 @@
+trigger: 
+  tags:
+    include:
+    - refs/tags/Release-v*
+
+stages:
+- stage: test
+  displayName: 'Code Quality'
+  jobs:
+  - job: Linting
+    steps:
+      - script: |
+          python -m pip install flake8
+        displayName: 'Installing Flake8'
+      - script: |
+          flake8 src/
+        displayName: 'Running linting tests'
+
+  - job: UnitTesting
+    displayName: 'Unit Testing'
+    dependsOn: Linting
+    condition: eq(variables['Build.Reason'], 'PullRequest')
+    steps: 
+      - script: |
+          pip install -r requirements.txt
+          python -m pip install pytest
+          python -m pip install pytest-cov
+        displayName: 'Installing Dependencies'
+      - script: |
+          pytest --cov=src/ test/
+        displayName: 'Running unit test coverage'
+
+- stage: deployDev
+  displayName: 'Deploy to Dev'
+  dependsOn: test
+  jobs:
+    - deployment: publishPipeline
+      displayName: 'Model Training'
+      condition: eq(variables['Build.Reason'], 'PullRequest')
+      pool:
+        vmImage: 'Ubuntu-18.04'
+      environment: dev
+      strategy:
+       runOnce:
+         deploy:
+          steps:
+          - template: aml-steps.yml
+            parameters:
+              rgname: '<ADD RESOURCE GROUP NAME>'
+              amlwsname: '<ADD AML WORKSPACE NAME>'
+              initialdatasetname: '<ADD NAME OF DATASET (OPTIONAL)>'
+              codeenvname: 'AzureML-sklearn-0.24-ubuntu18.04-py37-cpu'
+              computename: '<ADD AML COMPUTE NAME>'
+              serviceconnectionname: '<ADD SERVICE CONNECTION NAME>'
+    - job: deploy
+      displayName: 'Model Deployment'
+      dependsOn: publishPipeline
+      steps:
+        - task: AzureCLI@1
+          displayName: "Deploy to ACI (CLI)"
+          inputs:
+            azureSubscription: '<ADD SERVICE CONNECTION NAME>'
+            scriptLocation: inlineScript
+            workingDirectory: $(Build.SourcesDirectory)/src/scoring
+            inlineScript: |
+              set -e # fail on error
+              az extension add -n azure-cli-ml
+              az ml folder attach -w <ADD AML WORKSPACE NAME> -g <ADD RESOURCE GROUP NAME>
+              model_id=$(az ml model list --model-name=diabetes_model.pkl --latest --query "[0].id" -o tsv)
+              az ml model deploy --name diabetes-service --model $model_id \
+              --ic inference_config.yml \
+              --dc deployment_config.yml \
+              --overwrite -v
+
+- stage: deployPreProd
+  displayName: 'Deploy to Pre-Prod'
+  dependsOn: deployDev
+  jobs:
+    - deployment: publishPipeline
+      displayName: 'Model Training'
+      pool:
+        vmImage: 'Ubuntu-18.04'
+      environment: preprod
+      strategy:
+       runOnce:
+         deploy:
+          steps:
+           - script: |
+              echo "Model training, evaluation and registration happens here"
+    - job: deploy
+      displayName: 'Model Deployment'
+      dependsOn: publishPipeline
+      steps:
+        - script: |
+            echo "Model deployment to Pre Prod happens here"
+          displayName: "Deploy to ACI (CLI)"
+
+- stage: deployProd
+  displayName: 'Deploy to Prod'
+  dependsOn: deployPreProd
+  condition: startsWith(variables['build.sourceBranchName'], 'Release-v')
+  jobs:
+    - deployment: publishPipeline
+      displayName: 'Model Training'
+      pool:
+        vmImage: 'Ubuntu-18.04'
+      environment: prod
+      strategy:
+       runOnce:
+         deploy:
+          steps:
+           - script: |
+              echo "Model training, evaluation and registration happens here"
+    - job: deploy
+      displayName: 'Model Deployment'
+      dependsOn: publishPipeline
+      steps:
+        - script: |
+            echo "Model deployment to Prod happens here"
+          displayName: "Deploy to ACI (CLI)"
